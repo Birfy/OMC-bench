@@ -1,5 +1,4 @@
-# OMC-bench for Machine-learned interatomic potential in Organic Molecular Crystals (OMCs)
----
+# **O**MC-bench for machine-learned interatomic potential in **O**rganic **M**olecular **C**rystals (**OMC**s)---
 
 ## Table of Contents
 
