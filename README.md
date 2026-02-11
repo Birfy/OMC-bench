@@ -1,4 +1,4 @@
-# **O**MC-bench for machine-learned interatomic potential in **O**rganic **M**olecular **C**rystals (**OMC**s)---
+# <font color="#8B0000">O</font>MC-bench for machine-learned interatomic potential in <font color="#8B0000">O</font>rganic <font color="#8B0000">M</font>olecular <font color="#8B0000">C</font>rystals (<font color="#8B0000">OMC</font>s)
 
 ## Table of Contents
 
