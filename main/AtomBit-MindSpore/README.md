@@ -1,13 +1,23 @@
 # AtomBit-MindSpore (Ascend + MindSpore Usage Guide)
 
-This part of the repository is focused on **training workflow on Ascend hardware with MindSpore**.  
-This document only covers environment setup, data preparation, launch commands, and troubleshooting. It intentionally does **not** describe model internals.
+This subproject is an **engineering guide** for running training on **Ascend NPUs with MindSpore**.  
+It focuses on setup, data preparation, launch, and troubleshooting, and intentionally does **not** cover model internals.
 
-> Training entrypoint: `Train_dist.py`
+> Primary training entrypoint: `Train_dist.py`
 
 ---
 
-## 1. Project Layout and Responsibilities
+## 1) What this README helps you do
+
+- Prepare a compatible Ascend + MindSpore runtime.
+- Build HDF5 training data and metadata.
+- Generate E0 reference values and connect them to training.
+- Run single-card first, then scale to multi-card with `msrun`.
+- Quickly diagnose common startup and runtime issues.
+
+---
+
+## 2) Project structure at a glance
 
 ```text
 AtomBit-MindSpore/
@@ -27,141 +37,207 @@ AtomBit-MindSpore/
 
 ---
 
-## 2. Ascend + MindSpore Environment Requirements
+## 3) Environment requirements (Ascend + MindSpore)
 
-Make sure the following components are version-compatible:
+### 3.1 Version baseline
 
-- CANN (`8.3.RC1`)
-- MindSpore (Ascend build, `2.7.1`)
-- Python 3.9+
+Use a version-compatible stack:
 
-Common Python dependencies:
+- CANN: `8.3.RC1`
+- MindSpore (Ascend build): `2.7.1`
+- Python: `3.9+`
+
+Python packages commonly required by this training pipeline:
 
 - `numpy`
 - `h5py`
 - `tqdm`
 
-### 2.1 Required Checks
+### 3.2 Quick environment checks
 
-1. `msrun` is available (required for distributed training).
-2. Ascend devices are visible (for example, check `npu-smi info` and confirm `ASCEND_RT_VISIBLE_DEVICES` is configured correctly).
-3. Multi-node/multi-card communication environment is configured according to Ascend official guidance.
+1. Verify Ascend devices are visible:
+
+   ```bash
+   npu-smi info
+   ```
+
+2. Verify `msrun` is available:
+
+   ```bash
+   which msrun
+   ```
+
+3. Confirm your selected devices are exposed correctly before launch:
+
+   ```bash
+   echo "$ASCEND_RT_VISIBLE_DEVICES"
+   ```
+
+4. For multi-node/multi-card training, ensure communication config follows Ascend official setup guidance.
+
+> Practical recommendation: always validate on single-card first before any distributed launch.
 
 ---
 
-## 3. Data Preparation (HDF5)
+## 4) Data preparation (HDF5 + metadata + E0)
 
-Training uses **h5 chunks + metadata** by default.
+Training expects **HDF5 chunks + metadata**, with optional E0 reference file for corrected energy handling.
 
-### 3.1 Preprocessing Command
+### 4.1 Build HDF5 chunks and metadata
 
 ```bash
 python scripts/Preprocess_h5.py
 ```
 
-This script converts raw structure files into:
+Expected outputs:
 
-- Multiple `.h5` chunk files
-- Metadata files (including fields such as `file_path`, `index_in_file`, `num_atoms`, `num_edges`)
+- One or more `.h5` chunk files.
+- Metadata file(s) containing fields like:
+  - `file_path`
+  - `index_in_file`
+  - `num_atoms`
+  - `num_edges`
 
-### 3.2 Precompute E0 (Recommended)
-
-Before training, generate and save reference energies (`e0_dict`) with:
+### 4.2 Generate E0 file (recommended)
 
 ```bash
 python scripts/compute_save_e0.py
 ```
 
-Then set `E0_PATH` in `Train_dist.py` to the generated file so training can load the precomputed E0 values.
+Then point `E0_PATH` in `Train_dist.py` to the generated E0 file.
 
-### 3.3 Metadata Naming Consistency
+### 4.3 Metadata naming consistency
 
-A common issue is naming mismatch:
+A common startup failure is metadata suffix mismatch:
 
-- Preprocessing may output: `*_metadata.pickle`
-- Training config may load: `*.pkl`
+- Preprocess script may output: `*_metadata.pickle`
+- Training config may expect: `*.pkl`
 
-Please make sure `TRAIN_META` and `TEST_META` in `Train_dist.py` match your actual metadata filenames.
+Ensure `TRAIN_META` and `TEST_META` in `Train_dist.py` exactly match your actual filenames.
 
 ---
 
-## 4. Config Fields to Update Before Training
+## 5) Configuration checklist before first run
 
-In `Config` inside `Train_dist.py`, verify at least:
+In `Config` (inside `Train_dist.py`), verify at least:
 
-- `DATA_DIR`: root directory for h5 data
+- `DATA_DIR`: HDF5 root directory
 - `TRAIN_META` / `TEST_META`: metadata filenames
-- `LOG_DIR`: log and checkpoint output directory
-- `E0_PATH`: optional external reference energy path
+- `LOG_DIR`: output path for logs/checkpoints
+- `E0_PATH`: E0 file path (if used)
+
+Recommended first-run checks:
+
+- Paths are absolute or unambiguous.
+- `DATA_DIR` and metadata files are readable by your runtime user.
+- `LOG_DIR` is writable.
 
 ---
 
-## 5. Launch Methods
+## 6) Launch training
 
-### 5.1 Single-Card (Ascend)
+### 6.1 Single-card (recommended first)
 
 ```bash
 python Train_dist.py
 ```
 
-Use this first to validate environment and data pipeline.
+Use this run to validate:
 
-### 5.2 Multi-Card (Ascend + msrun)
+- import path correctness
+- data loading correctness
+- metric/loss printing and checkpoint saving behavior
+
+### 6.2 Multi-card with `msrun`
 
 ```bash
 bash train.sh
 ```
 
-`train.sh` typically includes:
+A typical `train.sh` includes:
 
 - `PARALLEL_MODE=DATA_PARALLEL`
 - `PYTHONPATH=$(pwd)/sharker:$PYTHONPATH`
 - `msrun --worker_num=... Train_dist.py`
 
-Adjust worker count and visible device settings based on your hardware.
+When adapting to your machine, confirm:
+
+- worker count equals intended visible devices
+- `ASCEND_RT_VISIBLE_DEVICES` matches the selected cards
+- each rank can read the same data and metadata paths
 
 ---
 
-## 6. Logs and Artifacts
+## 7) Logs and artifacts: what to expect
 
-Outputs are generated under `LOG_DIR`, including:
+`LOG_DIR` usually contains:
 
-- Training logs
-- Per-epoch checkpoints (for example, `model_epoch_{k}.ckpt`)
+- training logs
+- per-epoch checkpoints (for example: `model_epoch_{k}.ckpt`)
 
-Track loss and validation metrics to verify convergence and stability.
+If run quality looks suspicious, check:
 
----
-
-## 7. Common Issues in Ascend Deployments
-
-### 7.1 Metadata Not Found
-
-- Check whether `DATA_DIR` is correct.
-- Check whether `TRAIN_META` / `TEST_META` filename and extension match (`.pickle` vs `.pkl`).
-
-### 7.2 Dataloader Errors After Distributed Launch
-
-- Check whether `PYTHONPATH` includes `sharker`.
-- Check whether all ranks can access the same data path.
-- Check whether metadata `file_path` values point to existing files.
-
-### 7.3 Training Starts but Is Unstable
-
-- Validate data correctness on single-card first.
-- Then scale to multi-card gradually and inspect batch settings, parallel parameters, and I/O bottlenecks.
+- loss trend over early epochs
+- validation metrics consistency across epochs
+- whether checkpoints are produced at expected intervals
 
 ---
 
-## 8. Minimal Runbook
+## 8) Common issues and fast fixes
 
-1. Prepare Ascend + MindSpore environment (including `msrun`).
-2. Run `python scripts/Preprocess_h5.py` to generate h5 + metadata.
-3. Run `python scripts/compute_save_e0.py` and set `E0_PATH` to the generated file.
-4. Update data and output paths in `Train_dist.py`.
-5. Validate with single-card: `python Train_dist.py`.
-6. Scale with multi-card: `bash train.sh`.
+### 8.1 "metadata file not found"
+
+- Re-check `DATA_DIR`, `TRAIN_META`, `TEST_META`.
+- Confirm suffix consistency (`.pickle` vs `.pkl`).
+- Confirm metadata file is physically present in expected location.
+
+### 8.2 Distributed launch starts but dataloader/import fails
+
+- Ensure `PYTHONPATH` includes `sharker`.
+- Ensure every rank can access identical data paths.
+- Validate `file_path` entries in metadata point to existing `.h5` files.
+
+### 8.3 Training starts but is unstable or slow
+
+- Reproduce on single-card first.
+- Then scale gradually (e.g., 1 -> 2 -> N cards).
+- Inspect data I/O throughput and per-step latency.
+
+### 8.4 E0 appears not applied
+
+- Confirm `E0_PATH` is set and points to the newly generated E0 file.
+- Confirm the file is readable at runtime.
 
 ---
 
-For model architecture, loss formulation, and theoretical details, refer to external model documentation. This README is intentionally scoped to Ascend + MindSpore engineering usage.
+## 9) End-to-end minimal runbook (recommended order)
+
+1. Prepare Ascend + MindSpore environment (`npu-smi info`, `msrun` check).
+2. Run preprocessing:
+
+   ```bash
+   python scripts/Preprocess_h5.py
+   ```
+
+3. Generate E0 and configure `E0_PATH`:
+
+   ```bash
+   python scripts/compute_save_e0.py
+   ```
+
+4. Update `Config` paths in `Train_dist.py` (`DATA_DIR`, `TRAIN_META`, `TEST_META`, `LOG_DIR`, `E0_PATH`).
+5. Run single-card sanity test:
+
+   ```bash
+   python Train_dist.py
+   ```
+
+6. Scale to distributed run:
+
+   ```bash
+   bash train.sh
+   ```
+
+---
+
+For model architecture, loss definition, and theory, refer to external model documentation. This README is intentionally scoped to Ascend + MindSpore operational usage.
